@@ -672,20 +672,14 @@ public class DeadlockApp extends Application {
      * Libera um recurso aleatório de um processo que o possui.
      * @param idProcesso O ID do processo.
      */
-    public void liberarUmRecursoAleatorio(int idProcesso) {
+    public void liberarUmRecurso(int idProcesso, List<Integer> recursosPossuidos) {
         lockSistema.lock();
         try {
-            List<Integer> recursosPossuidos = new ArrayList<>();
-            for (int i = 0; i < tiposRecurso.size(); i++) {
-                if (alocacao[idProcesso - 1][i] > 0) {
-                    recursosPossuidos.add(i);
-                }
-            }
-
             if (!recursosPossuidos.isEmpty()) {
-                int indiceParaLiberar = recursosPossuidos.get(new Random().nextInt(recursosPossuidos.size()));
+                int indiceParaLiberar = recursosPossuidos.get(0);
                 log("PROCESSO " + idProcesso + " vai liberar o recurso " + getNomeRecurso(indiceParaLiberar));
                 liberarRecurso(idProcesso, indiceParaLiberar);
+                recursosPossuidos.remove(0); // Remove o recurso liberado da lista de possuídos
             }
         } finally {
             lockSistema.unlock();
@@ -721,6 +715,7 @@ enum StatusProcesso {
 // =================================================================================
 class Processo implements Runnable {
     final int idProcesso;
+    List<Integer> recursosPossuidos = new ArrayList<>();
     private final long tempoSolicitacao; // ΔTs em segundos
     private final long tempoUtilizacao;  // ΔTu em segundos
     private final DeadlockApp app;
@@ -742,15 +737,13 @@ class Processo implements Runnable {
     public void run() {
         while (rodando) {
             try {
-                // Pequeno tempo de "pensamento" antes de uma nova ação.
-                TimeUnit.SECONDS.sleep(1);
 
                 // Decide se vai solicitar um novo recurso ou liberar um existente.
-                if (app.processoTemRecursos(idProcesso) && new Random().nextDouble() < 0.4) { // 40% de chance de liberar um recurso
+                if (app.processoTemRecursos(idProcesso)) {
                     // --- AÇÃO DE LIBERAÇÃO ---
                     // Simula o uso do recurso por um tempo antes de liberá-lo.
                     TimeUnit.SECONDS.sleep(tempoUtilizacao);
-                    app.liberarUmRecursoAleatorio(idProcesso);
+                    app.liberarUmRecurso(idProcesso, recursosPossuidos);
 
                 } else {
                     // --- AÇÃO DE SOLICITAÇÃO ---
@@ -760,13 +753,13 @@ class Processo implements Runnable {
                     int indiceRecurso = app.getIndiceRecursoAleatorio();
                     if (indiceRecurso != -1) {
                         app.solicitarRecurso(idProcesso, indiceRecurso);
-
                         // Se o processo for bloqueado, ele espera aqui até ser acordado.
                         synchronized (lock) {
                             while (status == StatusProcesso.BLOQUEADO) {
                                 lock.wait();
                             }
                         }
+                        recursosPossuidos.add(indiceRecurso);
                     }
                 }
             } catch (InterruptedException e) {
