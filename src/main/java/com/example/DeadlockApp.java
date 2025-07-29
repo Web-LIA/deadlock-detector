@@ -1,6 +1,3 @@
-// IMPORTANTE:
-// Este ficheiro deve estar dentro de uma estrutura de pastas que corresponda ao pacote.
-// Ex: seu-projeto/src/com/example/DeadlockApp.java
 package com.example;
 
 import java.util.ArrayList;
@@ -13,10 +10,10 @@ import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.locks.Lock;
-import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 import javafx.application.Application;
 import javafx.application.Platform;
@@ -49,7 +46,8 @@ public class DeadlockApp extends Application {
     // --- Estruturas de Dados para Controle do Sistema ---
     private final List<Recurso> tiposRecurso = new ArrayList<>();
     private final Map<Integer, Processo> processosAtivos = new ConcurrentHashMap<>();
-    private final Lock lockSistema = new ReentrantLock(true); // Lock para garantir acesso seguro às estruturas de dados
+    
+    private final Semaphore lockSistema = new Semaphore(1, true);
 
     // Matrizes para o algoritmo de detecção de deadlock
     private int[][] alocacao = new int[MAX_PROCESSOS][MAX_RECURSOS];
@@ -73,21 +71,13 @@ public class DeadlockApp extends Application {
 
     @Override
     public void start(Stage primaryStage) {
-        primaryStage.setTitle("Simulador de Detecção de Deadlock");
+        primaryStage.setTitle("Simulador de Detecção de Deadlock com Semáforos");
 
-        // Layout principal
         BorderPane root = new BorderPane();
         root.setPadding(new Insets(10));
-
-        // --- Painel de Configuração (Topo) ---
-        VBox configBox = criarPainelConfiguracao();
-        root.setTop(configBox);
-
-        // --- Painel de Visualização (Centro) ---
-        GridPane statusPane = criarPainelStatus();
-        root.setCenter(statusPane);
-
-        // --- Painel de Log (Baixo) ---
+        root.setTop(criarPainelConfiguracao());
+        root.setCenter(criarPainelStatus());
+        
         VBox logBox = new VBox(5, new Label("Log de Operações:"), logArea);
         logArea.setEditable(false);
         logArea.setPrefHeight(150);
@@ -96,7 +86,6 @@ public class DeadlockApp extends Application {
         Scene scene = new Scene(root, 1000, 800);
         primaryStage.setScene(scene);
         primaryStage.setOnCloseRequest(e -> {
-            // Garante que todas as threads sejam encerradas ao fechar a janela
             if (executorProcessos != null) {
                 executorProcessos.shutdownNow();
             }
@@ -107,11 +96,7 @@ public class DeadlockApp extends Application {
         primaryStage.show();
     }
 
-    /**
-     * Cria o painel de configuração para adicionar recursos e processos.
-     */
     private VBox criarPainelConfiguracao() {
-        // --- Seção de Recursos ---
         GridPane resourceGrid = new GridPane();
         resourceGrid.setHgap(10);
         resourceGrid.setVgap(5);
@@ -134,7 +119,6 @@ public class DeadlockApp extends Application {
         resourceGrid.add(qtdRecursoField, 1, 2);
         resourceGrid.add(addRecursoBtn, 1, 3);
 
-        // --- Seção de Processos ---
         GridPane processGrid = new GridPane();
         processGrid.setHgap(10);
         processGrid.setVgap(5);
@@ -159,7 +143,6 @@ public class DeadlockApp extends Application {
         processGrid.add(addProcessoBtn, 1, 3);
         processGrid.add(removerProcessoBtn, 2, 3);
 
-        // --- Seção de Controle do SO ---
         GridPane soGrid = new GridPane();
         soGrid.setHgap(10);
         soGrid.setVgap(5);
@@ -176,14 +159,12 @@ public class DeadlockApp extends Application {
         soGrid.add(iniciarSimulacaoBtn, 1, 1);
         soGrid.add(forcarDeadlockBtn, 2, 1);
 
-        // --- Ações dos Botões ---
         addRecursoBtn.setOnAction(e -> adicionarRecurso(nomeRecursoField.getText(), idRecursoField.getText(), qtdRecursoField.getText()));
         addProcessoBtn.setOnAction(e -> adicionarProcesso(idProcessoField.getText(), tempoSolicitacaoField.getText(), tempoUtilizacaoField.getText()));
         removerProcessoBtn.setOnAction(e -> removerProcesso(idProcessoField.getText()));
         iniciarSimulacaoBtn.setOnAction(e -> iniciarSimulacao(tempoVerificacaoField.getText()));
         forcarDeadlockBtn.setOnAction(e -> forcarDeadlock());
 
-        // Agrupando seções de configuração
         HBox configHBox = new HBox(20, resourceGrid, processGrid, soGrid);
         configHBox.setAlignment(Pos.CENTER);
         
@@ -194,9 +175,6 @@ public class DeadlockApp extends Application {
         return configVBox;
     }
 
-    /**
-     * Cria o painel que exibe o status dos processos e recursos.
-     */
     private GridPane criarPainelStatus() {
         GridPane statusPane = new GridPane();
         statusPane.setHgap(10);
@@ -238,7 +216,6 @@ public class DeadlockApp extends Application {
 
             Recurso novoRecurso = new Recurso(nome, id, quantidade);
             tiposRecurso.add(novoRecurso);
-            // Ordena para manter consistência dos índices
             tiposRecurso.sort(Comparator.comparingInt(r -> r.id)); 
             log("INFO: Recurso '" + nome + "' (ID: " + id + ", Qtd: " + quantidade + ") adicionado.");
             atualizarStatusRecursos();
@@ -285,10 +262,11 @@ public class DeadlockApp extends Application {
     private void removerProcesso(String idStr) {
         try {
             int id = Integer.parseInt(idStr);
-            Processo p = processosAtivos.remove(id);
+            Processo p = processosAtivos.get(id);
 
             if (p != null) {
-                p.parar(); // Sinaliza para a thread parar
+                p.parar();
+                processosAtivos.remove(id);
                 liberarRecursosDeProcesso(p.idProcesso);
                 log("INFO: Processo " + id + " removido e seus recursos foram liberados.");
                 atualizarStatusProcessos();
@@ -302,12 +280,8 @@ public class DeadlockApp extends Application {
     }
 
     private void iniciarSimulacao(String dtStr) {
-        if (tiposRecurso.isEmpty()) {
-            log("ERRO: Adicione recursos antes de iniciar.");
-            return;
-        }
-        if (processosAtivos.isEmpty()) {
-            log("ERRO: Adicione processos antes de iniciar.");
+        if (tiposRecurso.isEmpty() || processosAtivos.isEmpty()) {
+            log("ERRO: Adicione recursos e processos antes de iniciar.");
             return;
         }
         if (so != null && so.isAlive()) {
@@ -318,7 +292,6 @@ public class DeadlockApp extends Application {
         try {
             long dt = Long.parseLong(dtStr);
 
-            // Inicializa o vetor de recursos disponíveis se ainda não foi
             if (disponivel == null) {
                 disponivel = new int[tiposRecurso.size()];
                 for (int i = 0; i < tiposRecurso.size(); i++) {
@@ -326,84 +299,71 @@ public class DeadlockApp extends Application {
                 }
             }
 
-            // Inicia a thread do Sistema Operacional
             so = new SistemaOperacional(dt, this);
             threadSO = new Thread(so);
-            threadSO.setDaemon(true); // Permite que a JVM feche mesmo que a thread esteja rodando
+            threadSO.setDaemon(true);
             threadSO.start();
 
-            // Inicia as threads dos processos
             executorProcessos = Executors.newFixedThreadPool(MAX_PROCESSOS);
             processosAtivos.values().forEach(executorProcessos::submit);
             
             log("INFO: Simulação iniciada. Verificação de deadlock a cada " + dt + " segundos.");
-            atualizarStatusRecursos(); // Atualiza a UI para mostrar os recursos disponíveis
+            atualizarStatusRecursos();
 
         } catch (NumberFormatException ex) {
             log("ERRO: Intervalo de verificação (Δt) deve ser um número.");
         }
     }
 
-    /**
-     * Configura um cenário clássico de deadlock para demonstração.
-     */
     private void forcarDeadlock() {
         if (so != null && so.isAlive()) {
             log("ERRO: Não é possível forçar deadlock com a simulação em andamento.");
             return;
         }
 
-        // 1. Limpar estado anterior
         tiposRecurso.clear();
         processosAtivos.clear();
         alocacao = new int[MAX_PROCESSOS][MAX_RECURSOS];
         requisicao = new int[MAX_PROCESSOS][MAX_RECURSOS];
-        disponivel = null; // Reseta o array de disponíveis
+        disponivel = null;
         log("INFO: Configuração reiniciada para exemplo de deadlock.");
 
-        // 2. Criar recursos (2 recursos, 1 instância cada)
         adicionarRecurso("Impressora", "1", "1");
         adicionarRecurso("Scanner", "2", "1");
 
-        // 3. Criar processos
-        adicionarProcesso("1", "999", "999"); // Tempos altos para não executarem sozinhos
+        adicionarProcesso("1", "999", "999");
         adicionarProcesso("2", "999", "999");
 
-        // 4. Configurar manualmente o estado de deadlock
-        lockSistema.lock();
         try {
-            // Inicializa o 'disponivel' para o setup manual
-            disponivel = new int[tiposRecurso.size()];
-            for (int i = 0; i < tiposRecurso.size(); i++) {
-                disponivel[i] = tiposRecurso.get(i).quantidadeTotal;
+            lockSistema.acquire();
+            try {
+                disponivel = new int[tiposRecurso.size()];
+                for (int i = 0; i < tiposRecurso.size(); i++) {
+                    disponivel[i] = tiposRecurso.get(i).quantidadeTotal;
+                }
+
+                alocacao[0][0] = 1;
+                disponivel[0]--;
+                alocacao[1][1] = 1;
+                disponivel[1]--;
+
+                requisicao[0][1] = 1;
+                processosAtivos.get(1).bloquear(1);
+                requisicao[1][0] = 1;
+                processosAtivos.get(2).bloquear(0);
+
+                log("INFO: Estado de deadlock forçado manualmente.");
+                log("INFO: P1 alocou Impressora e espera por Scanner.");
+                log("INFO: P2 alocou Scanner e espera por Impressora.");
+                log("INFO: Clique em 'Iniciar Simulação' para que o SO detecte o deadlock.");
+
+            } finally {
+                lockSistema.release();
             }
-
-            // P1 (ID 1, index 0) aloca R1 (Impressora, index 0)
-            alocacao[0][0] = 1;
-            disponivel[0]--;
-
-            // P2 (ID 2, index 1) aloca R2 (Scanner, index 1)
-            alocacao[1][1] = 1;
-            disponivel[1]--;
-
-            // P1 requisita R2
-            requisicao[0][1] = 1;
-            processosAtivos.get(1).bloquear(1); // Bloqueia P1 esperando pelo recurso de índice 1
-
-            // P2 requisita R1
-            requisicao[1][0] = 1;
-            processosAtivos.get(2).bloquear(0); // Bloqueia P2 esperando pelo recurso de índice 0
-
-            log("INFO: Estado de deadlock forçado manualmente.");
-            log("INFO: P1 alocou Impressora e espera por Scanner.");
-            log("INFO: P2 alocou Scanner e espera por Impressora.");
-            log("INFO: Clique em 'Iniciar Simulação' para que o SO detecte o deadlock.");
-
-        } finally {
-            lockSistema.unlock();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log("ERRO: A configuração de deadlock foi interrompida.");
         }
-
-        // 5. Atualizar a UI
         atualizarTodosStatus();
     }
 
@@ -411,72 +371,78 @@ public class DeadlockApp extends Application {
     // --- Métodos de Sincronização e Comunicação ---
 
     public void solicitarRecurso(int idProcesso, int indiceRecurso) {
-        lockSistema.lock();
         try {
-            log("PROCESSO " + idProcesso + " está a solicitar " + getNomeRecurso(indiceRecurso));
-            // O processo 'idProcesso' quer 1 instância do recurso 'indiceRecurso'
-            if (disponivel[indiceRecurso] > 0) {
-                disponivel[indiceRecurso]--;
-                alocacao[idProcesso - 1][indiceRecurso]++;
-                log("PROCESSO " + idProcesso + " alocou o recurso " + getNomeRecurso(indiceRecurso));
-            } else {
-                // Se não há recurso disponível, o processo bloqueia
-                requisicao[idProcesso - 1][indiceRecurso]++;
-                Processo p = processosAtivos.get(idProcesso);
-                if (p != null) {
-                    p.bloquear(indiceRecurso);
-                    log("PROCESSO " + idProcesso + " bloqueado esperando por " + getNomeRecurso(indiceRecurso));
+            lockSistema.acquire();
+            try {
+                log("PROCESSO " + idProcesso + " está a solicitar " + getNomeRecurso(indiceRecurso));
+                if (disponivel[indiceRecurso] > 0) {
+                    disponivel[indiceRecurso]--;
+                    alocacao[idProcesso - 1][indiceRecurso]++;
+                    log("PROCESSO " + idProcesso + " alocou o recurso " + getNomeRecurso(indiceRecurso));
+                } else {
+                    requisicao[idProcesso - 1][indiceRecurso]++;
+                    Processo p = processosAtivos.get(idProcesso);
+                    if (p != null) {
+                        p.bloquear(indiceRecurso);
+                        log("PROCESSO " + idProcesso + " bloqueado esperando por " + getNomeRecurso(indiceRecurso));
+                    }
                 }
+                atualizarTodosStatus();
+            } finally {
+                lockSistema.release();
             }
-            atualizarTodosStatus();
-        } finally {
-            lockSistema.unlock();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 
     public void liberarRecurso(int idProcesso, int indiceRecurso) {
-        lockSistema.lock();
         try {
-            if (alocacao[idProcesso - 1][indiceRecurso] > 0) {
-                alocacao[idProcesso - 1][indiceRecurso]--;
-                disponivel[indiceRecurso]++;
-                log("PROCESSO " + idProcesso + " liberou o recurso " + getNomeRecurso(indiceRecurso));
-
-                // Acorda processos que possam estar esperando por este recurso
-                acordarProcessos(indiceRecurso);
-                atualizarTodosStatus();
+            lockSistema.acquire();
+            try {
+                if (alocacao[idProcesso - 1][indiceRecurso] > 0) {
+                    alocacao[idProcesso - 1][indiceRecurso]--;
+                    disponivel[indiceRecurso]++;
+                    log("PROCESSO " + idProcesso + " liberou o recurso " + getNomeRecurso(indiceRecurso));
+                    acordarProcessos(indiceRecurso);
+                    atualizarTodosStatus();
+                }
+            } finally {
+                lockSistema.release();
             }
-        } finally {
-            lockSistema.unlock();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
     
     private void liberarRecursosDeProcesso(int idProcesso) {
-        lockSistema.lock();
         try {
-            for (int i = 0; i < tiposRecurso.size(); i++) {
-                if (alocacao[idProcesso - 1][i] > 0) {
-                    disponivel[i] += alocacao[idProcesso - 1][i];
-                    alocacao[idProcesso - 1][i] = 0;
-                    acordarProcessos(i);
+            lockSistema.acquire();
+            try {
+                for (int i = 0; i < tiposRecurso.size(); i++) {
+                    if (alocacao[idProcesso - 1][i] > 0) {
+                        disponivel[i] += alocacao[idProcesso - 1][i];
+                        alocacao[idProcesso - 1][i] = 0;
+                        acordarProcessos(i);
+                    }
+                    requisicao[idProcesso - 1][i] = 0;
                 }
-                requisicao[idProcesso - 1][i] = 0;
+            } finally {
+                lockSistema.release();
             }
-        } finally {
-            lockSistema.unlock();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 
     private void acordarProcessos(int indiceRecurso) {
-        // Itera sobre todos os processos para ver se algum estava esperando pelo recurso liberado
         for (int i = 0; i < MAX_PROCESSOS; i++) {
             if (requisicao[i][indiceRecurso] > 0) {
                 Processo p = processosAtivos.get(i + 1);
                 if (p != null && p.getStatus() == StatusProcesso.BLOQUEADO && disponivel[indiceRecurso] > 0) {
-                    // Tenta alocar o recurso para o processo que estava bloqueado
                     disponivel[indiceRecurso]--;
                     alocacao[i][indiceRecurso]++;
-                    requisicao[i][indiceRecurso]--; // A requisição foi atendida
+                    requisicao[i][indiceRecurso]--;
                     p.acordar();
                     log("PROCESSO " + p.idProcesso + " foi acordado e alocou " + getNomeRecurso(indiceRecurso));
                 }
@@ -485,80 +451,70 @@ public class DeadlockApp extends Application {
     }
     
     public void detectarDeadlock() {
-        lockSistema.lock();
         try {
-            int numProcessos = processosAtivos.size();
-            int numRecursos = tiposRecurso.size();
-            
-            if (numProcessos == 0) return;
+            lockSistema.acquire();
+            try {
+                if (processosAtivos.isEmpty()) return;
 
-            // Algoritmo de Detecção de Deadlock (baseado no Algoritmo do Banqueiro)
-            int[] trabalho = Arrays.copyOf(disponivel, numRecursos);
-            boolean[] finalizar = new boolean[MAX_PROCESSOS];
-            // Inicialmente, considera processos que não estão alocando nada como finalizados
-            for (int i = 0; i < MAX_PROCESSOS; i++) {
-                if (!processosAtivos.containsKey(i + 1)) {
-                    finalizar[i] = true;
-                } else {
-                    boolean temAlocacao = false;
-                    for(int j=0; j<numRecursos; j++) {
-                        if(alocacao[i][j] > 0) {
-                            temAlocacao = true;
-                            break;
-                        }
-                    }
-                    // Se um processo não tem nada alocado, não pode estar em um ciclo de deadlock
-                    finalizar[i] = !temAlocacao;
-                }
-            }
-
-            boolean encontrouProcesso;
-            do {
-                encontrouProcesso = false;
+                int numRecursos = tiposRecurso.size();
+                int[] trabalho = Arrays.copyOf(disponivel, numRecursos);
+                boolean[] finalizar = new boolean[MAX_PROCESSOS];
+                
                 for (int i = 0; i < MAX_PROCESSOS; i++) {
-                    if (!finalizar[i] && processoPodeExecutar(i, trabalho, numRecursos)) {
-                        // Simula a liberação de recursos
-                        for (int j = 0; j < numRecursos; j++) {
-                            trabalho[j] += alocacao[i][j];
-                        }
+                    if (!processosAtivos.containsKey(i + 1)) {
                         finalizar[i] = true;
-                        encontrouProcesso = true;
+                    } else {
+                        finalizar[i] = !processoTemRecursosNoIndice(i);
                     }
                 }
-            } while (encontrouProcesso);
 
-            // Verifica se algum processo não pôde ser finalizado
-            List<Integer> processosEmDeadlock = new ArrayList<>();
-            for (int i = 0; i < MAX_PROCESSOS; i++) {
-                if (processosAtivos.containsKey(i + 1) && !finalizar[i]) {
-                    processosEmDeadlock.add(i + 1);
+                boolean encontrouProcesso;
+                do {
+                    encontrouProcesso = false;
+                    for (int i = 0; i < MAX_PROCESSOS; i++) {
+                        if (!finalizar[i] && processoPodeExecutar(i, trabalho, numRecursos)) {
+                            for (int j = 0; j < numRecursos; j++) {
+                                trabalho[j] += alocacao[i][j];
+                            }
+                            finalizar[i] = true;
+                            encontrouProcesso = true;
+                        }
+                    }
+                } while (encontrouProcesso);
+
+                List<Integer> processosEmDeadlock = new ArrayList<>();
+                for (int i = 0; i < MAX_PROCESSOS; i++) {
+                    if (processosAtivos.containsKey(i + 1) && !finalizar[i]) {
+                        processosEmDeadlock.add(i + 1);
+                    }
                 }
+
+                Platform.runLater(() -> {
+                    if (processosEmDeadlock.isEmpty()) {
+                        deadlockStatusLabel.setText("Status Deadlock: Nenhum deadlock detectado.");
+                        deadlockStatusLabel.setStyle("-fx-text-fill: green;");
+                    } else {
+                        String ids = processosEmDeadlock.stream()
+                                                        .map(String::valueOf)
+                                                        .collect(Collectors.joining(", "));
+                        deadlockStatusLabel.setText("DEADLOCK DETECTADO! Processos envolvidos: " + ids);
+                        deadlockStatusLabel.setStyle("-fx-text-fill: red; -fx-font-weight: bold;");
+                        log("DEADLOCK: Detectado envolvendo processos: " + ids);
+                    }
+                });
+
+            } finally {
+                lockSistema.release();
             }
-
-            // Atualiza a UI com o resultado
-            Platform.runLater(() -> {
-                if (processosEmDeadlock.isEmpty()) {
-                    deadlockStatusLabel.setText("Status Deadlock: Nenhum deadlock detectado.");
-                    deadlockStatusLabel.setStyle("-fx-text-fill: green;");
-                } else {
-                    String ids = processosEmDeadlock.stream()
-                                                    .map(String::valueOf)
-                                                    .collect(Collectors.joining(", "));
-                    deadlockStatusLabel.setText("DEADLOCK DETECTADO! Processos envolvidos: " + ids);
-                    deadlockStatusLabel.setStyle("-fx-text-fill: red; -fx-font-weight: bold;");
-                    log("DEADLOCK: Detectado envolvendo processos: " + ids);
-                }
-            });
-
-        } finally {
-            lockSistema.unlock();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 
     private boolean processoPodeExecutar(int idProcessoIndex, int[] trabalho, int numRecursos) {
         for (int j = 0; j < numRecursos; j++) {
             if (requisicao[idProcessoIndex][j] > trabalho[j]) {
-                return false; // Não há recursos suficientes para satisfazer a requisição
+                return false;
             }
         }
         return true;
@@ -567,8 +523,15 @@ public class DeadlockApp extends Application {
 
     // --- Métodos de Atualização da UI ---
 
-    private void log(String message) {
+    public void log(String message) {
         Platform.runLater(() -> logArea.appendText(message + "\n"));
+    }
+    
+    public void logUsoRecurso(int idProcesso, int indiceRecurso) {
+        Processo p = processosAtivos.get(idProcesso);
+        if (p != null) {
+            log("PROCESSO " + idProcesso + " está a UTILIZAR " + getNomeRecurso(indiceRecurso) + " por " + p.getTempoUtilizacao() + "s.");
+        }
     }
 
     private void atualizarTodosStatus() {
@@ -605,11 +568,9 @@ public class DeadlockApp extends Application {
             for (int i = 0; i < tiposRecurso.size(); i++) {
                 Recurso r = tiposRecurso.get(i);
                 String status;
-                // Verifica se a simulação está rodando (disponivel não é nulo) e se o índice é válido
                 if (disponivel != null && i < disponivel.length) {
                     status = r.nome + " (ID: " + r.id + ") | Total: " + r.quantidadeTotal + " | Disponível: " + disponivel[i];
                 } else {
-                    // Antes da simulação, mostra apenas o total
                     status = r.nome + " (ID: " + r.id + ") | Total: " + r.quantidadeTotal;
                 }
                 recursosStatusList.getItems().add(status);
@@ -623,11 +584,6 @@ public class DeadlockApp extends Application {
             return tiposRecurso.get(indice);
         }
         return null;
-    }
-    
-    public int getIndiceRecursoAleatorio() {
-        if (tiposRecurso.isEmpty()) return -1;
-        return new Random().nextInt(tiposRecurso.size());
     }
     
     public int getNumTiposRecurso() {
@@ -648,42 +604,15 @@ public class DeadlockApp extends Application {
         }
         return sb.toString().trim();
     }
-
-    /**
-     * Verifica se um processo possui algum recurso alocado.
-     * @param idProcesso O ID do processo a ser verificado.
-     * @return true se o processo possui pelo menos um recurso, false caso contrário.
-     */
-    public boolean processoTemRecursos(int idProcesso) {
-        lockSistema.lock();
-        try {
-            for (int i = 0; i < tiposRecurso.size(); i++) {
-                if (alocacao[idProcesso - 1][i] > 0) {
-                    return true;
-                }
+    
+    private boolean processoTemRecursosNoIndice(int processoIndex) {
+        if (processoIndex < 0 || processoIndex >= alocacao.length) return false;
+        for (int i = 0; i < tiposRecurso.size(); i++) {
+            if (alocacao[processoIndex][i] > 0) {
+                return true;
             }
-            return false;
-        } finally {
-            lockSistema.unlock();
         }
-    }
-
-    /**
-     * Libera um recurso aleatório de um processo que o possui.
-     * @param idProcesso O ID do processo.
-     */
-    public void liberarUmRecurso(int idProcesso, List<Integer> recursosPossuidos) {
-        lockSistema.lock();
-        try {
-            if (!recursosPossuidos.isEmpty()) {
-                int indiceParaLiberar = recursosPossuidos.get(0);
-                log("PROCESSO " + idProcesso + " vai liberar o recurso " + getNomeRecurso(indiceParaLiberar));
-                liberarRecurso(idProcesso, indiceParaLiberar);
-                recursosPossuidos.remove(0); // Remove o recurso liberado da lista de possuídos
-            }
-        } finally {
-            lockSistema.unlock();
-        }
+        return false;
     }
 }
 
@@ -715,15 +644,30 @@ enum StatusProcesso {
 // =================================================================================
 class Processo implements Runnable {
     final int idProcesso;
-    List<Integer> recursosPossuidos = new ArrayList<>();
     private final long tempoSolicitacao; // ΔTs em segundos
     private final long tempoUtilizacao;  // ΔTu em segundos
     private final DeadlockApp app;
 
     private volatile StatusProcesso status;
     private volatile boolean rodando = true;
-    private final Object lock = new Object();
+    private volatile Thread thread;
+    
+    private final Semaphore semaforoBloqueio = new Semaphore(0);
     private int recursoEsperado = -1;
+
+    private static class RecursoAlocado {
+        final int indiceRecurso;
+        final long tempoLiberacao;
+
+        RecursoAlocado(int indice, long tempoDeUsoMs) {
+            this.indiceRecurso = indice;
+            this.tempoLiberacao = System.currentTimeMillis() + tempoDeUsoMs;
+        }
+    }
+
+    private final List<RecursoAlocado> recursosEmUso = Collections.synchronizedList(new ArrayList<>());
+    
+    private long proximaSolicitacao;
 
     public Processo(int id, long ts, long tu, DeadlockApp app) {
         this.idProcesso = id;
@@ -735,36 +679,65 @@ class Processo implements Runnable {
 
     @Override
     public void run() {
+        this.thread = Thread.currentThread();
+        this.proximaSolicitacao = System.currentTimeMillis() + (tempoSolicitacao * 1000);
+
         while (rodando) {
             try {
+                long agora = System.currentTimeMillis();
 
-                // Decide se vai solicitar um novo recurso ou liberar um existente.
-                if (app.processoTemRecursos(idProcesso)) {
-                    // --- AÇÃO DE LIBERAÇÃO ---
-                    // Simula o uso do recurso por um tempo antes de liberá-lo.
-                    TimeUnit.SECONDS.sleep(tempoUtilizacao);
-                    app.liberarUmRecurso(idProcesso, recursosPossuidos);
-
-                } else {
-                    // --- AÇÃO DE SOLICITAÇÃO ---
-                    // Espera o intervalo de tempo de solicitação.
-                    TimeUnit.SECONDS.sleep(tempoSolicitacao);
-                    
-                    int indiceRecurso = app.getIndiceRecursoAleatorio();
-                    if (indiceRecurso != -1) {
-                        app.solicitarRecurso(idProcesso, indiceRecurso);
-                        // Se o processo for bloqueado, ele espera aqui até ser acordado.
-                        synchronized (lock) {
-                            while (status == StatusProcesso.BLOQUEADO) {
-                                lock.wait();
-                            }
+                // 1. VERIFICA SE PRECISA LIBERAR RECURSOS
+                synchronized (recursosEmUso) {
+                    recursosEmUso.removeIf(recurso -> {
+                        if (agora >= recurso.tempoLiberacao) {
+                            app.liberarRecurso(idProcesso, recurso.indiceRecurso);
+                            return true;
                         }
-                        recursosPossuidos.add(indiceRecurso);
-                    }
+                        return false;
+                    });
                 }
+
+                // 2. VERIFICA SE PRECISA SOLICITAR NOVO RECURSO
+                if (agora >= proximaSolicitacao) {
+                    
+                    // CORREÇÃO: Cria uma lista de recursos que o processo ainda não possui.
+                    List<Integer> recursosSolicitaveis = IntStream.range(0, app.getNumTiposRecurso())
+                                                                  .boxed()
+                                                                  .collect(Collectors.toList());
+                    synchronized(recursosEmUso) {
+                        for(RecursoAlocado ra : recursosEmUso) {
+                            recursosSolicitaveis.remove(Integer.valueOf(ra.indiceRecurso));
+                        }
+                    }
+
+                    if (!recursosSolicitaveis.isEmpty()) {
+                        // Escolhe um recurso aleatório da lista de solicitáveis
+                        int indiceRecursoSolicitado = recursosSolicitaveis.get(new Random().nextInt(recursosSolicitaveis.size()));
+                        
+                        app.solicitarRecurso(idProcesso, indiceRecursoSolicitado);
+
+                        if (status == StatusProcesso.BLOQUEADO) {
+                            semaforoBloqueio.acquire();
+                        }
+                        
+                        // Se não foi bloqueado (ou foi acordado), adiciona o recurso à lista de gerenciamento
+                        if (status == StatusProcesso.EXECUTANDO) {
+                            recursosEmUso.add(new RecursoAlocado(indiceRecursoSolicitado, tempoUtilizacao * 1000));
+                            app.logUsoRecurso(idProcesso, indiceRecursoSolicitado);
+                        }
+                    } else {
+                        app.log("PROCESSO " + idProcesso + " já possui todos os tipos de recursos. Nenhuma nova solicitação será feita por enquanto.");
+                    }
+
+                    // Agenda a próxima solicitação independentemente de ter conseguido ou não
+                    this.proximaSolicitacao = System.currentTimeMillis() + (tempoSolicitacao * 1000);
+                }
+
+                TimeUnit.MILLISECONDS.sleep(100);
+
             } catch (InterruptedException e) {
-                Thread.currentThread().interrupt(); // Restaura o status de interrupção
-                rodando = false; // Encerra o loop
+                rodando = false;
+                Thread.currentThread().interrupt();
             }
         }
         System.out.println("Processo " + idProcesso + " encerrado.");
@@ -772,7 +745,9 @@ class Processo implements Runnable {
 
     public void parar() {
         this.rodando = false;
-        Thread.currentThread().interrupt(); // Interrompe o sleep/wait
+        if (thread != null) {
+            thread.interrupt();
+        }
     }
 
     public void bloquear(int indiceRecurso) {
@@ -781,11 +756,9 @@ class Processo implements Runnable {
     }
 
     public void acordar() {
-        synchronized (lock) {
-            this.status = StatusProcesso.EXECUTANDO;
-            this.recursoEsperado = -1;
-            lock.notify(); // Notifica a thread do processo para continuar
-        }
+        this.status = StatusProcesso.EXECUTANDO;
+        this.recursoEsperado = -1;
+        semaforoBloqueio.release();
     }
     
     public StatusProcesso getStatus() {
@@ -795,13 +768,17 @@ class Processo implements Runnable {
     public int getRecursoEsperado() {
         return recursoEsperado;
     }
+
+    public long getTempoUtilizacao() {
+        return tempoUtilizacao;
+    }
 }
 
 // =================================================================================
 // CLASSE SISTEMA OPERACIONAL (THREAD)
 // =================================================================================
 class SistemaOperacional implements Runnable {
-    private final long intervaloVerificacao; // Δt em segundos
+    private final long intervaloVerificacao;
     private final DeadlockApp app;
     private volatile boolean rodando = true;
 
@@ -817,8 +794,8 @@ class SistemaOperacional implements Runnable {
                 TimeUnit.SECONDS.sleep(intervaloVerificacao);
                 app.detectarDeadlock();
             } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
                 rodando = false;
+                Thread.currentThread().interrupt();
             }
         }
         System.out.println("Thread do Sistema Operacional encerrada.");
